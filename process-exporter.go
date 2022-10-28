@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
+	"github.com/shirou/gopsutil/mem"
 	"github.com/sirupsen/logrus"
 	//	"io/ioutil"
 	"net/http"
@@ -95,27 +96,33 @@ func (e *Exporter) scrape() {
 					// See http://godoc.org/github.com/shirou/gopsutil/process
 					// {"rss":2514944,"vms":110858240,"shared":2113536,"text":897024,"lib":0,"data":0,"dirty":36003840}
 					// {"cpu":"cpu","user":0.0,"system":0.0,"idle":0.0,"nice":0.0,"iowait":0.0,"irq":0.0,"softirq":0.0,"steal":0.0,"guest":0.0,"guestNice":0.0,"stolen":0.0}
-					/*
-						meminfo, _ := proc.MemoryInfoEx()
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_rss"}).Set(float64(meminfo.RSS))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_vms"}).Set(float64(meminfo.VMS))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.Shared))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_text"}).Set(float64(meminfo.Text))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_lib"}).Set(float64(meminfo.Lib))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_data"}).Set(float64(meminfo.Data))
-						e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_dirty"}).Set(float64(meminfo.Dirty))
-					*/
+
+					meminfo, _ := mem.VirtualMemory()
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.Shared))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_dirty"}).Set(float64(meminfo.Dirty))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_percent"}).Set(float64(meminfo.UsedPercent))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_total"}).Set(float64(meminfo.Total))
+
 					cpuinfo, _ := proc.Times()
+					cpofds, _ := proc.OpenFiles()
+
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_user"}).Set(cpuinfo.User)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_system"}).Set(cpuinfo.System)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_idle"}).Set(cpuinfo.Idle)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_nice"}).Set(cpuinfo.Nice)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_iowait"}).Set(cpuinfo.Iowait)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_irq"}).Set(cpuinfo.Irq)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_softirq"}).Set(cpuinfo.Softirq)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_steal"}).Set(cpuinfo.Steal)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_guest"}).Set(cpuinfo.Guest)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_guestNice"}).Set(cpuinfo.GuestNice)
+					//e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_fds"}).Set(float64(cpofds))
+
+					//if len(cpofds) > 0 {
+					//	fmt.Printf("myslice1 = %v\n", cpofds[].Fd)
+					//}
+					res := 0
+					for index := range cpofds {
+						res += int(cpofds[index].Fd)
+					}
+
+					fmt.Printf("myslice[%v] = %v\n", pid, res)
+
+					//fmt.Printf("myslice1 = %v\n", cpofds)
+
 				}
 			}
 		}
