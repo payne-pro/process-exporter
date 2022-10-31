@@ -5,6 +5,9 @@ import (
 	//	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/version"
+	"github.com/sirupsen/logrus"
 	//	"io/ioutil"
 	"net/http"
 	//	"net/url"
@@ -17,8 +20,6 @@ import (
 	"github.com/shirou/gopsutil/process"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
-	"github.com/prometheus/common/version"
 )
 
 const (
@@ -60,7 +61,7 @@ func (e *Exporter) scrape() {
 
 	procs, err := process.Pids()
 	if err != nil {
-		log.Errorf("Couldn't retrieve processes: %v", err)
+		logrus.Errorf("Couldn't retrieve processes: %v", err)
 		return
 	}
 
@@ -94,26 +95,31 @@ func (e *Exporter) scrape() {
 					// See http://godoc.org/github.com/shirou/gopsutil/process
 					// {"rss":2514944,"vms":110858240,"shared":2113536,"text":897024,"lib":0,"data":0,"dirty":36003840}
 					// {"cpu":"cpu","user":0.0,"system":0.0,"idle":0.0,"nice":0.0,"iowait":0.0,"irq":0.0,"softirq":0.0,"steal":0.0,"guest":0.0,"guestNice":0.0,"stolen":0.0}
+
 					meminfo, _ := proc.MemoryInfoEx()
+
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_rss"}).Set(float64(meminfo.RSS))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_vms"}).Set(float64(meminfo.VMS))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.Shared))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_text"}).Set(float64(meminfo.Text))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_lib"}).Set(float64(meminfo.Lib))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_data"}).Set(float64(meminfo.Data))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_dirty"}).Set(float64(meminfo.Dirty))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_locked"}).Set(float64(meminfo.Shared))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.VMS))
+
 					cpuinfo, _ := proc.Times()
+					cpp, _ := proc.CPUPercent()
+
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_user"}).Set(cpuinfo.User)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_system"}).Set(cpuinfo.System)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_idle"}).Set(cpuinfo.Idle)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_nice"}).Set(cpuinfo.Nice)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_iowait"}).Set(cpuinfo.Iowait)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_irq"}).Set(cpuinfo.Irq)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_softirq"}).Set(cpuinfo.Softirq)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_steal"}).Set(cpuinfo.Steal)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_guest"}).Set(cpuinfo.Guest)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_guestNice"}).Set(cpuinfo.GuestNice)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_stolen"}).Set(cpuinfo.Stolen)
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_perc"}).Set(cpp)
+
+					proc_ofds, _ := proc.OpenFiles()
+					proc_un, _ := proc.RlimitUsage(true)
+
+					res := 0
+					for index := range proc_ofds {
+						res += int(proc_ofds[index].Fd)
+					}
+
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_openfds_max"}).Set(float64(proc_un[process.RLIMIT_NOFILE].Hard))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_openfds_total"}).Set(float64(res))
+
 				}
 			}
 		}
@@ -161,7 +167,7 @@ func main() {
 
 	var (
 		listenAddress   = flag.String("web.listen-address", ":8980", "Address to listen on for web interface and telemetry.")
-		metricsPath     = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		metricsPath     = flag.String("web.telemetry-path", "/metrics", "Path under which to  metrics.")
 		showVersion     = flag.Bool("version", false, "Print version information.")
 		processExpr     = flag.String("process.watch", "", processHelpText)
 		processExprSkip = flag.String("process.nowatch", "", processHelpText)
@@ -173,36 +179,36 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Infoln("Starting process_exporter", version.Info())
-	log.Infoln("Build context", version.BuildContext())
+	logrus.Infoln("Starting process_exporter", version.Info())
+	logrus.Infoln("Build context", version.BuildContext())
 
 	// Don't split empty strings, it gives non-empty arrays?
 	if *processExpr != "" {
-		log.Infoln("Watch:", *processExpr)
+		logrus.Infoln("Watch:", *processExpr)
 		to_watch = strings.Split(*processExpr, ",")
 	} else {
-		log.Infoln("Empty list to watch")
+		logrus.Infoln("Empty list to watch")
 		to_watch = []string{}
 	}
 	if *processExprSkip != "" {
-		log.Infoln("Skip:", *processExprSkip)
+		logrus.Infoln("Skip:", *processExprSkip)
 		to_skip = strings.Split(*processExprSkip, ",")
 	} else {
-		log.Infoln("Empty list to skip")
+		logrus.Infoln("Empty list to skip")
 		to_skip = []string{}
 	}
 
 	metrics := map[string]*prometheus.GaugeVec{}
 	exporter, err := NewExporter(metrics)
 	if err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("process_exporter"))
 
-	log.Infoln("Listening on", *listenAddress)
-	http.Handle(*metricsPath, prometheus.Handler())
+	logrus.Infoln("Listening on", *listenAddress)
+	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
 		<head><title>Process Exporter</title></head>
@@ -212,6 +218,6 @@ func main() {
 		</body>
 		</html>`))
 	})
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+	logrus.Fatal(http.ListenAndServe(*listenAddress, nil))
 
 }
