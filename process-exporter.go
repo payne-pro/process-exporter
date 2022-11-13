@@ -5,23 +5,30 @@ import (
 	//	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
 	"github.com/shirou/gopsutil/mem"
+	"github.com/shirou/gopsutil/process"
 	"github.com/sirupsen/logrus"
+	"net"
+	"regexp"
+
 	//	"io/ioutil"
 	"net/http"
 	//	"net/url"
 	"os"
 	//	"regexp"
+	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v3"
 	"strconv"
 	"strings"
-	//	"time"
-	//
-	"github.com/shirou/gopsutil/process"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
+
+// MetricValue is the value of a metric, with its labels.
+type MetricValue struct {
+	Value  float64
+	Labels map[string]string
+}
 
 const (
 	namespace = "indivdual"
@@ -30,12 +37,16 @@ const (
 var (
 	to_watch = []string{}
 	to_skip  = []string{}
+
+	codeRegex = regexp.MustCompile("^[0-9x]{3}$")
 )
 
 type Exporter struct {
 	up             prometheus.Gauge
 	totalScrapes   prometheus.Counter
 	processMetrics map[string]*prometheus.GaugeVec
+
+	conn net.Conn
 }
 
 // NewExporter returns an initialized Exporter.
@@ -159,6 +170,91 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.up
 	ch <- e.totalScrapes
 	e.collectMetrics(ch)
+}
+
+// scrapeMethod will return metrics for one method.
+func (e *Exporter) scrapeMethod(method string) (map[string][]MetricValue, error) {
+	records, err := e.fetchBINRPC(method)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// we expect just 1 record of type map
+	if len(records) == 2 && records[0].Type == binrpc.TypeInt && records[0].Value.(int) == 500 {
+		return nil, fmt.Errorf(`invalid response for method "%s": [500] %s`, method, records[1].Value.(string))
+	} else if len(records) != 1 {
+		return nil, fmt.Errorf(`invalid response for method "%s", expected %d record, got %d`,
+			method, 1, len(records),
+		)
+	}
+
+	// all methods implemented in this exporter return a struct
+	items, err := records[0].StructItems()
+
+	if err != nil {
+		return nil, err
+	}
+
+	metrics := make(map[string][]MetricValue)
+
+	switch method {
+	case "sl.stats":
+		fallthrough
+	case "tm.stats":
+		for _, item := range items {
+			i, _ := item.Value.Int()
+
+			if codeRegex.MatchString(item.Key) {
+				// this item is a "code" statistic, eg "200" or "6xx"
+				metrics["codes"] = append(metrics["codes"],
+					MetricValue{
+						Value: float64(i),
+						Labels: map[string]string{
+							"code": item.Key,
+						},
+					},
+				)
+			} else {
+				metrics[item.Key] = []MetricValue{{Value: float64(i)}}
+			}
+		}
+	case "tls.info":
+		fallthrough
+	case "core.shmmem":
+		fallthrough
+	case "core.tcp_info":
+		fallthrough
+	case "dlg.stats_active":
+		fallthrough
+	case "core.uptime":
+		for _, item := range items {
+			i, _ := item.Value.Int()
+			metrics[item.Key] = []MetricValue{{Value: float64(i)}}
+		}
+	}
+
+	return metrics, nil
+}
+
+// fetchBINRPC talks to kamailio using the BINRPC protocol.
+func (e *Exporter) fetchBINRPC(method string) ([]binrpc.Record, error) {
+	// WritePacket returns the cookie generated
+	cookie, err := binrpc.WritePacket(e.conn, "core.uptime")
+
+	if err != nil {
+		return nil, err
+	}
+
+	// the cookie is passed again for verification
+	// we receive records in response
+	records, err := binrpc.ReadPacket(e.conn, cookie)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
 }
 
 // Main function
