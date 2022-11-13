@@ -12,7 +12,9 @@ import (
 	"github.com/shirou/gopsutil/process"
 	"github.com/sirupsen/logrus"
 	"net"
+	"net/url"
 	"regexp"
+	"time"
 
 	//	"io/ioutil"
 	"net/http"
@@ -46,7 +48,10 @@ type Exporter struct {
 	totalScrapes   prometheus.Counter
 	processMetrics map[string]*prometheus.GaugeVec
 
-	conn net.Conn
+	conn    net.Conn
+	url     *url.URL
+	URI     string
+	Timeout time.Duration
 }
 
 // NewExporter returns an initialized Exporter.
@@ -115,28 +120,55 @@ func (e *Exporter) scrape() {
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_total"}).Set(float64(meminfo.Total))
 
 					cpuinfo, _ := proc.Times()
-					cpofds, _ := proc.OpenFiles()
 
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_user"}).Set(cpuinfo.User)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_system"}).Set(cpuinfo.System)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_idle"}).Set(cpuinfo.Idle)
-					//e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_fds"}).Set(float64(cpofds))
-
-					//if len(cpofds) > 0 {
-					//	fmt.Printf("myslice1 = %v\n", cpofds[].Fd)
-					//}
-					res := 0
-					for index := range cpofds {
-						res += int(cpofds[index].Fd)
-					}
-
-					fmt.Printf("myslice[%v] = %v\n", pid, res)
-
-					//fmt.Printf("myslice1 = %v\n", cpofds)
 
 				}
 			}
 		}
+	}
+	e.Timeout = 5
+	e.URI = "unix:/var/run/kamailio/kamailio_ctl"
+	var url *url.URL
+	if url, err = url.Parse(e.URI); err != nil {
+		fmt.Errorf("cannot parse URI: %w", err)
+	}
+
+	e.url = url
+
+	address := e.url.Host
+	if e.url.Scheme == "unix" {
+		address = e.url.Path
+	}
+
+	e.conn, err = net.Dial(e.url.Scheme, address)
+
+	if err != nil {
+		fmt.Printf("asd [%v]", err)
+	}
+
+	//	e.conn.SetDeadline(time.Now().Add(e.Timeout))
+	//	defer e.conn.Close()
+
+	Methods := strings.Split("core.uptime", ",")
+	for _, method := range Methods {
+		metricsScraped, err := e.scrapeMethod(method)
+		metricValues, found := metricsScraped["uptime"]
+
+		if !found {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		for _, metricValue := range metricValues {
+			e.processMetrics["13"].With(prometheus.Labels{"process": "bullet_kamailio", "pid": "13", "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
+			e.processMetrics["bullet_kamailio"+strconv.Itoa(int(13))].With(prometheus.Labels{"process": "bullet_kamailio", "pid": strconv.Itoa(int(13)), "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
+			fmt.Printf("[%v]\n", metricValue.Value)
+		}
+
 	}
 
 	e.up.Set(1)
@@ -240,7 +272,7 @@ func (e *Exporter) scrapeMethod(method string) (map[string][]MetricValue, error)
 // fetchBINRPC talks to kamailio using the BINRPC protocol.
 func (e *Exporter) fetchBINRPC(method string) ([]binrpc.Record, error) {
 	// WritePacket returns the cookie generated
-	cookie, err := binrpc.WritePacket(e.conn, "core.uptime")
+	cookie, err := binrpc.WritePacket(e.conn, method)
 
 	if err != nil {
 		return nil, err
@@ -249,11 +281,11 @@ func (e *Exporter) fetchBINRPC(method string) ([]binrpc.Record, error) {
 	// the cookie is passed again for verification
 	// we receive records in response
 	records, err := binrpc.ReadPacket(e.conn, cookie)
+	fmt.Printf("[%v]", records)
 
 	if err != nil {
 		return nil, err
 	}
-
 	return records, nil
 }
 
