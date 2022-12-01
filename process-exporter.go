@@ -129,8 +129,47 @@ func (e *Exporter) scrape() {
 			}
 		}
 	}
+	e.Timeout = 5
+	e.URI = "unix:/var/run/kamailio/kamailio_ctl"
+	var url *url.URL
+	if url, err = url.Parse(e.URI); err != nil {
+		fmt.Errorf("cannot parse URI: %w", err)
+	}
 
-	e.getKamailioStat()
+	e.url = url
+
+	address := e.url.Host
+	if e.url.Scheme == "unix" {
+		address = e.url.Path
+	}
+
+	e.conn, err = net.Dial(e.url.Scheme, address)
+
+	if err != nil {
+		fmt.Printf("asd [%v]", err)
+	}
+
+	//	e.conn.SetDeadline(time.Now().Add(e.Timeout))
+	//	defer e.conn.Close()
+
+	Methods := strings.Split("core.uptime", ",")
+	for _, method := range Methods {
+		metricsScraped, err := e.scrapeMethod(method)
+		metricValues, found := metricsScraped["uptime"]
+
+		if !found {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		for _, metricValue := range metricValues {
+			e.processMetrics["13"].With(prometheus.Labels{"process": "bullet_kamailio", "pid": "13", "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
+			e.processMetrics["bullet_kamailio"+strconv.Itoa(int(13))].With(prometheus.Labels{"process": "bullet_kamailio", "pid": strconv.Itoa(int(13)), "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
+			fmt.Printf("[%v]\n", metricValue.Value)
+		}
+
+	}
 
 	e.up.Set(1)
 }
@@ -225,10 +264,8 @@ func (e *Exporter) scrapeMethod(method string) (map[string][]MetricValue, error)
 			i, _ := item.Value.Int()
 			metrics[item.Key] = []MetricValue{{Value: float64(i)}}
 		}
-	case "ul.dump":
-		targets := getRegistredUsers(items)
-		fmt.Printf("%v", targets)
 	}
+
 	return metrics, nil
 }
 
@@ -250,115 +287,6 @@ func (e *Exporter) fetchBINRPC(method string) ([]binrpc.Record, error) {
 		return nil, err
 	}
 	return records, nil
-}
-
-func (e *Exporter) getKamailioStat() {
-
-	e.Timeout = 5
-	e.URI = "unix:/var/run/kamailio/kamailio_ctl"
-
-	var url *url.URL
-	var err error
-
-	if url, err = url.Parse(e.URI); err != nil {
-		fmt.Errorf("cannot parse URI: %w", err)
-	}
-	e.url = url
-
-	address := e.url.Host
-	if e.url.Scheme == "unix" {
-		address = e.url.Path
-	}
-
-	e.conn, err = net.Dial(e.url.Scheme, address)
-
-	if err != nil {
-		fmt.Printf("asd [%v]", err)
-	}
-
-	//	e.conn.SetDeadline(time.Now().Add(e.Timeout))
-	//	defer e.conn.Close()
-
-	Methods := strings.Split("ul.dump", ",")
-
-	for _, method := range Methods {
-		metricsScraped, err := e.scrapeMethod(method)
-		metricValues, found := metricsScraped["Domains"]
-
-		if !found {
-			continue
-		}
-
-		if err != nil {
-			return
-		}
-
-		e.processMetrics["bullet_kamailio"] = prometheus.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: namespace,
-				Name:      "process",
-				Help:      "metrics of the process",
-			},
-			[]string{
-				"process",
-				"metric",
-			},
-		)
-
-		for _, metricValue := range metricValues {
-			//e.processMetrics["bullet_kamailio"].With(prometheus.Labels{"process": "bullet_kamailio", "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
-			fmt.Printf("bullet [%v]=[%v]\n", metricValues, metricValue.Value)
-		}
-
-	}
-	e.conn.Close()
-}
-
-func getRegistredUsers(items []binrpc.StructItem) int {
-	itter := 0
-	items1, _ := items[0].Value.StructItems()
-	items2, _ := items1[0].Value.StructItems()
-	items3, _ := items2[2].Value.StructItems()
-
-	for _, Info := range items3 {
-		if Info.Key != "Info" {
-			continue
-		}
-
-		Contacts, _ := Info.Value.StructItems()
-
-		for _, Contact := range Contacts {
-			if Contact.Key != "Contacts" {
-				continue
-			}
-
-			contact, _ := Contact.Value.StructItems()
-
-			for _, pre_results := range contact {
-				if pre_results.Key != "Contact" {
-					continue
-				}
-
-				results, _ := pre_results.Value.StructItems()
-
-				for _, result := range results {
-					if result.Key != "Socket" {
-						continue
-					}
-
-					if result.Value.Value != "[not set]" {
-						itter += 1
-					}
-
-				}
-
-			}
-
-		}
-
-	}
-
-	return itter
 }
 
 // Main function
