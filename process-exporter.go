@@ -8,12 +8,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
-	"github.com/shirou/gopsutil/mem"
 	"github.com/shirou/gopsutil/process"
 	"github.com/sirupsen/logrus"
 	"net"
 	"net/url"
-	"regexp"
 	"time"
 
 	//	"io/ioutil"
@@ -32,6 +30,13 @@ type MetricValue struct {
 	Labels map[string]string
 }
 
+type KamailioMetric struct {
+	Kind   prometheus.ValueType
+	Name   string
+	Help   string
+	Method string // kamailio method associated with the metric
+}
+
 const (
 	namespace = "indivdual"
 )
@@ -40,8 +45,57 @@ var (
 	to_watch = []string{}
 	to_skip  = []string{}
 
-	codeRegex = regexp.MustCompile("^[0-9x]{3}$")
+	metricsList = map[string][]KamailioMetric{
+		"core.shmmem": {
+			NewMetricGauge("total", "Total shared memory.", "core.shmmem"),
+			NewMetricGauge("free", "Free shared memory.", "core.shmmem"),
+			NewMetricGauge("used", "Used shared memory.", "core.shmmem"),
+			NewMetricGauge("real_used", "Real used shared memory.", "core.shmmem"),
+			NewMetricGauge("max_used", "Max used shared memory.", "core.shmmem"),
+			NewMetricGauge("fragments", "Number of fragments in shared memory.", "core.shmmem"),
+		},
+		"core.uptime": {
+			NewMetricCounter("uptime", "Uptime in seconds.", "core.uptime"),
+		},
+		"core.tcp_info": {
+			NewMetricGauge("readers", "Total TCP readers.", "core.tcp_info"),
+			NewMetricGauge("max_connections", "Maximum TCP connections", "core.tcp_info"),
+			NewMetricGauge("max_tls_connections", "Maximum TLS connections.", "core.tcp_info"),
+			NewMetricGauge("opened_connections", "Opened TCP connections.", "core.tcp_info"),
+			NewMetricGauge("opened_tls_connections", "Opened TLS connections.", "core.tcp_info"),
+			NewMetricGauge("write_queued_bytes", "Write queued bytes.", "core.tcp_info"),
+		},
+		"dlg.stats_active": {
+			NewMetricGauge("starting", "Dialogs starting.", "dlg.stats_active"),
+			NewMetricGauge("connecting", "Dialogs connecting.", "dlg.stats_active"),
+			NewMetricGauge("answering", "Dialogs answering.", "dlg.stats_active"),
+			NewMetricGauge("ongoing", "Dialogs ongoing.", "dlg.stats_active"),
+			NewMetricGauge("all", "Dialogs all.", "dlg.stats_active"),
+		},
+		"ul.dump": {
+			NewMetricGauge("users_count", "Count of registered user.", "ul.dump"),
+		},
+	}
 )
+
+func NewMetricGauge(name string, help string, method string, labels ...string) KamailioMetric {
+	return KamailioMetric{
+		prometheus.GaugeValue,
+		name,
+		help,
+		method,
+	}
+}
+
+// NewMetricCounter is a helper function to create a counter.
+func NewMetricCounter(name string, help string, method string, labels ...string) KamailioMetric {
+	return KamailioMetric{
+		prometheus.CounterValue,
+		name,
+		help,
+		method,
+	}
+}
 
 type Exporter struct {
 	up             prometheus.Gauge
@@ -109,66 +163,32 @@ func (e *Exporter) scrape() {
 							"metric",
 						},
 					)
-					// See http://godoc.org/github.com/shirou/gopsutil/process
-					// {"rss":2514944,"vms":110858240,"shared":2113536,"text":897024,"lib":0,"data":0,"dirty":36003840}
-					// {"cpu":"cpu","user":0.0,"system":0.0,"idle":0.0,"nice":0.0,"iowait":0.0,"irq":0.0,"softirq":0.0,"steal":0.0,"guest":0.0,"guestNice":0.0,"stolen":0.0}
 
-					meminfo, _ := mem.VirtualMemory()
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.Shared))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_dirty"}).Set(float64(meminfo.Dirty))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_percent"}).Set(float64(meminfo.UsedPercent))
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_total"}).Set(float64(meminfo.Total))
+					meminfo, _ := proc.MemoryInfoEx()
+
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_rss"}).Set(float64(meminfo.RSS))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_locked"}).Set(float64(meminfo.Shared))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "memory_shared"}).Set(float64(meminfo.VMS))
 
 					cpuinfo, _ := proc.Times()
+					cpu_percent, _ := proc.CPUPercent()
 
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_user"}).Set(cpuinfo.User)
 					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_system"}).Set(cpuinfo.System)
-					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_idle"}).Set(cpuinfo.Idle)
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "cpu_perc_usage"}).Set(cpu_percent)
+
+					proc_ofds, _ := proc.RlimitUsage(true)
+
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_openfds_max"}).Set(float64(proc_ofds[process.RLIMIT_NOFILE].Hard))
+					e.processMetrics[proc_arg+strconv.Itoa(int(pid))].With(prometheus.Labels{"process": proc_arg, "pid": strconv.Itoa(int(pid)), "metric": "proc_openfds_total"}).Set(float64(proc_ofds[process.RLIMIT_NOFILE].Used))
+
+					if strings.Contains(proc_arg, "kamailio") && want_process {
+						e.getKamailioStat("core.shmmem,core.tcp_info,dlg.stats_active,ul.dump")
+					}
 
 				}
 			}
 		}
-	}
-	e.Timeout = 5
-	e.URI = "unix:/var/run/kamailio/kamailio_ctl"
-	var url *url.URL
-	if url, err = url.Parse(e.URI); err != nil {
-		fmt.Errorf("cannot parse URI: %w", err)
-	}
-
-	e.url = url
-
-	address := e.url.Host
-	if e.url.Scheme == "unix" {
-		address = e.url.Path
-	}
-
-	e.conn, err = net.Dial(e.url.Scheme, address)
-
-	if err != nil {
-		fmt.Printf("asd [%v]", err)
-	}
-
-	//	e.conn.SetDeadline(time.Now().Add(e.Timeout))
-	//	defer e.conn.Close()
-
-	Methods := strings.Split("core.uptime", ",")
-	for _, method := range Methods {
-		metricsScraped, err := e.scrapeMethod(method)
-		metricValues, found := metricsScraped["uptime"]
-
-		if !found {
-			continue
-		}
-		if err != nil {
-			return
-		}
-		for _, metricValue := range metricValues {
-			e.processMetrics["13"].With(prometheus.Labels{"process": "bullet_kamailio", "pid": "13", "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
-			e.processMetrics["bullet_kamailio"+strconv.Itoa(int(13))].With(prometheus.Labels{"process": "bullet_kamailio", "pid": strconv.Itoa(int(13)), "metric": "kamailio_uptime"}).Set(float64(metricValue.Value))
-			fmt.Printf("[%v]\n", metricValue.Value)
-		}
-
 	}
 
 	e.up.Set(1)
@@ -231,26 +251,6 @@ func (e *Exporter) scrapeMethod(method string) (map[string][]MetricValue, error)
 	metrics := make(map[string][]MetricValue)
 
 	switch method {
-	case "sl.stats":
-		fallthrough
-	case "tm.stats":
-		for _, item := range items {
-			i, _ := item.Value.Int()
-
-			if codeRegex.MatchString(item.Key) {
-				// this item is a "code" statistic, eg "200" or "6xx"
-				metrics["codes"] = append(metrics["codes"],
-					MetricValue{
-						Value: float64(i),
-						Labels: map[string]string{
-							"code": item.Key,
-						},
-					},
-				)
-			} else {
-				metrics[item.Key] = []MetricValue{{Value: float64(i)}}
-			}
-		}
 	case "tls.info":
 		fallthrough
 	case "core.shmmem":
@@ -264,8 +264,10 @@ func (e *Exporter) scrapeMethod(method string) (map[string][]MetricValue, error)
 			i, _ := item.Value.Int()
 			metrics[item.Key] = []MetricValue{{Value: float64(i)}}
 		}
-	}
+	case "ul.dump":
+		metrics["users_count"] = []MetricValue{{Value: float64(getRegistredUsers(items))}}
 
+	}
 	return metrics, nil
 }
 
@@ -281,12 +283,127 @@ func (e *Exporter) fetchBINRPC(method string) ([]binrpc.Record, error) {
 	// the cookie is passed again for verification
 	// we receive records in response
 	records, err := binrpc.ReadPacket(e.conn, cookie)
-	fmt.Printf("[%v]", records)
 
 	if err != nil {
 		return nil, err
 	}
 	return records, nil
+}
+
+func (e *Exporter) getKamailioStat(methods string) {
+
+	e.Timeout = 5
+	e.URI = "unix:/var/run/kamailio/kamailio_ctl"
+
+	var url *url.URL
+	var err error
+
+	if url, err = url.Parse(e.URI); err != nil {
+		fmt.Errorf("cannot parse URI: %w", err)
+	}
+
+	e.url = url
+
+	address := e.url.Host
+	if e.url.Scheme == "unix" {
+		address = e.url.Path
+	}
+
+	e.conn, err = net.Dial(e.url.Scheme, address)
+
+	if err != nil {
+		fmt.Printf("[%s]", err)
+	}
+
+	Methods := strings.Split(methods, ",")
+
+	e.processMetrics["kamailio"] = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "kamailio",
+			Name:      "process",
+			Help:      "metrics of the process",
+		},
+		[]string{
+			"metric",
+		},
+	)
+
+	for _, method := range Methods {
+		if _, found := metricsList[method]; !found {
+			panic("invalid method requested")
+		}
+		metricsScraped, err := e.scrapeMethod(method)
+
+		if err != nil {
+			return
+		}
+
+		for _, metricDef := range metricsList[method] {
+			metricValues, found := metricsScraped[metricDef.Name]
+
+			if !found {
+				continue
+			}
+
+			for _, metricValue := range metricValues {
+				MetricName := fmt.Sprintf("%s_%s",
+					strings.Replace(method, ".", "_", -1),
+					metricDef.Name,
+				)
+
+				e.processMetrics["kamailio"].With(prometheus.Labels{"metric": MetricName}).Set(metricValue.Value)
+			}
+		}
+	}
+
+	e.conn.Close()
+}
+
+func getRegistredUsers(items []binrpc.StructItem) int {
+	itter := 0
+	items1, _ := items[0].Value.StructItems()
+	items2, _ := items1[0].Value.StructItems()
+	items3, _ := items2[2].Value.StructItems()
+
+	for _, Info := range items3 {
+		if Info.Key != "Info" {
+			continue
+		}
+
+		Contacts, _ := Info.Value.StructItems()
+
+		for _, Contact := range Contacts {
+			if Contact.Key != "Contacts" {
+				continue
+			}
+
+			contact, _ := Contact.Value.StructItems()
+
+			for _, pre_results := range contact {
+				if pre_results.Key != "Contact" {
+					continue
+				}
+
+				results, _ := pre_results.Value.StructItems()
+
+				for _, result := range results {
+					if result.Key != "Socket" {
+						continue
+					}
+
+					if result.Value.Value != "[not set]" {
+						itter += 1
+					}
+
+				}
+
+			}
+
+		}
+
+	}
+
+	return itter
 }
 
 // Main function
